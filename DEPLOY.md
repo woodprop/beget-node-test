@@ -4,20 +4,25 @@
 
 ```
 node-hosting-test/
-├── www/              ← то, что идёт на сервер (= public_html)
+├── www/              ← веб-корень (= public_html на сервере)
 │   ├── index.html    ← собирается Vite
 │   ├── assets/       ← собирается Vite
-│   ├── api.php       ← PHP API (исходник)
+│   └── api.php       ← единственный PHP в веб-корне
+├── lib/              ← PHP вне веб-корня (с секретами)
 │   ├── db.php
-│   └── config.php
-├── frontend/         ← исходники React (не на сервер)
+│   └── config.php    ← пароль БД — не доступен по URL
+├── frontend/         ← исходники React
 │   ├── src/
 │   ├── package.json
-│   └── vite.config.ts  (outDir = ../www, emptyOutDir: false)
+│   └── vite.config.ts
 └── .gitignore
 ```
 
-Вся папка `www/` коммитится в git — на сервере она напрямую = `public_html`.
+Почему `lib/` отдельно: если PHP упадёт/отключится, файлы из `www/` отдадутся как plain text. Поэтому `config.php` с паролем БД лежит вне веб-корня. `api.php` подключает `../lib/db.php` через `require`.
+
+На сервере:
+- `~/woodprxn.beget.tech/public_html/` ← содержимое `www/`
+- `~/woodprxn.beget.tech/lib/` ← содержимое `lib/` (на уровень выше веб-корня)
 
 ---
 
@@ -25,9 +30,9 @@ node-hosting-test/
 
 **Терминал 1 — PHP бэк:**
 ```powershell
-cd www
-php -S localhost:8000
+php -S localhost:8000 -t www
 ```
+Запуск из корня проекта: флаг `-t www` указывает веб-корень, а `../lib/` доступен скрипту через `require`.
 
 **Терминал 2 — React фронт (hot reload):**
 ```powershell
@@ -46,8 +51,15 @@ npm run dev
 
 Панель → **Базы данных** → Создать базу.
 
-### 2. Пропиши данные БД в `www/config.php`
+### 2. Создай локальный конфиг БД
 
+В репе лежит `lib/config.example.php` — шаблон. Скопируй его как `lib/config.php` и впиши данные:
+
+```powershell
+Copy-Item lib\config.example.php lib\config.php
+```
+
+Отредактируй `lib/config.php`:
 ```php
 return [
     'host'     => 'localhost',
@@ -57,6 +69,8 @@ return [
     'charset'  => 'utf8mb4',
 ];
 ```
+
+**`lib/config.php` в `.gitignore`** — секреты в репу не попадают. На сервере тоже нужно создать `lib/config.php` вручную (post-receive hook не затирает его).
 
 ### 3. Создай сайт в панели Beget
 
@@ -84,20 +98,36 @@ nano node-hosting-test.git/hooks/post-receive
 Содержимое hook'а:
 ```bash
 #!/bin/bash
-TARGET=/home/w/woodprxn/woodprxn.beget.tech/public_html
+SITE_ROOT=/home/w/woodprxn/woodprxn.beget.tech
+PUBLIC=$SITE_ROOT/public_html
+LIB=$SITE_ROOT/lib
 GIT_DIR=/home/w/woodprxn/repos/node-hosting-test.git
 
 while read oldrev newrev ref; do
     if [[ $ref =~ .*/main$ ]]; then
         echo "Deploying main branch..."
-        git --work-tree=/tmp/deploy-$$ --git-dir=$GIT_DIR checkout -f main
-        rm -rf $TARGET/*
-        cp -r /tmp/deploy-$$/www/* $TARGET/
-        rm -rf /tmp/deploy-$$
+        TMP=/tmp/deploy-$$
+        git --work-tree=$TMP --git-dir=$GIT_DIR checkout -f main
+
+        # Веб-корень
+        rm -rf $PUBLIC/*
+        cp -r $TMP/www/* $PUBLIC/
+
+        # Приватная папка — конфиги с секретами
+        # ВАЖНО: не затираем lib/config.php, если он уже отредактирован на сервере
+        mkdir -p $LIB
+        cp -n $TMP/lib/config.php $LIB/   # -n = не перезаписывать существующий
+        cp $TMP/lib/db.php $LIB/
+
+        rm -rf $TMP
         echo "Done."
     fi
 done
 ```
+
+Логика деплоя `lib/`:
+- `db.php` — обновляется (это код)
+- `config.php` — **копируется только если его ещё нет** (чтобы не затереть пароли БД, которые ты вписал на сервере)
 
 ```bash
 chmod +x node-hosting-test.git/hooks/post-receive
@@ -122,10 +152,15 @@ git push beget main
 cd ~
 git clone https://github.com/youruser/node-hosting-test.git
 
-# Удали дефолтный public_html и сделай симлинк на www/ из репо
+# Симлинк веб-корня на www/ из репо
 rm -rf ~/woodprxn.beget.tech/public_html
 ln -s ~/node-hosting-test/www ~/woodprxn.beget.tech/public_html
+
+# Симлинк lib (нужно вне веб-корня, но доступно из api.php через ../lib)
+ln -s ~/node-hosting-test/lib ~/woodprxn.beget.tech/lib
 ```
+
+**Пропиши пароль БД** в `~/node-hosting-test/lib/config.php` (можно отредактировать прямо на сервере — но тогда git будет показывать diff; альтернатива — хранить `config.php` вне git и ссылаться на локальный файл через симлинк).
 
 **Для обновления:**
 ```bash

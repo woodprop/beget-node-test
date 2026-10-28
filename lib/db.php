@@ -2,7 +2,7 @@
 function getDb(): PDO {
     static $pdo = null;
     if ($pdo === null) {
-        $cfg = require __DIR__ . '/config.php';
+        $cfg = require __DIR__ . '/config.php';  // sibling file in lib/
         $dsn = "mysql:host={$cfg['host']};dbname={$cfg['dbname']};charset={$cfg['charset']}";
         $pdo = new PDO($dsn, $cfg['user'], $cfg['password'], [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,

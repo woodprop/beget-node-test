@@ -5,6 +5,7 @@ node_modules/
 .env
 .env.local
 *.local
+lib/config.php
 
 # OS
 .DS_Store
