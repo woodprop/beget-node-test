@@ -1,7 +1,0 @@
-# Rename this file to .htaccess and put it in the project root on Beget.
-# Replace /home/USERNAME and /home/USERNAME/myapp with real paths.
-
-PassengerNodejs /home/USERNAME/.local/bin/node
-PassengerAppRoot /home/USERNAME/myapp
-PassengerAppType node
-PassengerStartupFile server.js

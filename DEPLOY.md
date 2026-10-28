@@ -1,173 +1,188 @@
-# Деплой на Beget (виртуальный хостинг)
+# Деплой на Beget через Git
 
-**Механизм:** Apache mod_passenger — Node.js запускается через `.htaccess`, без PM2 и Nginx-proxy.
+## Структура проекта
 
----
-
-## 1. Создай MySQL БД в панели Beget
-
-Панель → Базы данных → Создать базу данных.  
-Запиши: хост, имя БД, пользователь, пароль.
-
----
-
-## 2. Создай сайт и домен в панели Beget
-
-Панель → Сайты → Создать сайт → привяжи домен (NS-серверы должны указывать на Beget).  
-Beget создаст каталог `~/имя_сайта/public_html`. Он нам понадобится позже.
-
----
-
-## 3. Подключись по SSH и войди в Docker-окружение
-
-На Beget Node.js работает **только внутри Docker-контейнера**:
-
-```bash
-# Обычный SSH:
-ssh username@username.beget.tech
-
-# Войти в Docker (обязательно!):
-ssh localhost -p 222
+```
+node-hosting-test/
+├── www/              ← веб-корень (= public_html на сервере)
+│   ├── index.html    ← собирается Vite
+│   ├── assets/       ← собирается Vite
+│   └── api.php       ← единственный PHP в веб-корне
+├── lib/              ← PHP вне веб-корня (с секретами)
+│   ├── db.php
+│   └── config.php    ← пароль БД — не доступен по URL
+├── frontend/         ← исходники React
+│   ├── src/
+│   ├── package.json
+│   └── vite.config.ts
+└── .gitignore
 ```
 
-Все дальнейшие команды — внутри этого Docker-контейнера.
+Почему `lib/` отдельно: если PHP упадёт/отключится, файлы из `www/` отдадутся как plain text. Поэтому `config.php` с паролем БД лежит вне веб-корня. `api.php` подключает `../lib/db.php` через `require`.
+
+На сервере:
+- `~/woodprxn.beget.tech/public_html/` ← содержимое `www/`
+- `~/woodprxn.beget.tech/lib/` ← содержимое `lib/` (на уровень выше веб-корня)
 
 ---
 
-## 4. Установи Node.js в ~/.local
+## Локальная разработка
 
-Проверь версию Ubuntu (влияет на максимальную версию Node.js):
-```bash
-cat /etc/os-release
-# Ubuntu 22.04 → можно до v24
-# Ubuntu 18.04 → максимум v17.9.1, или используй сборку Beget (v18–21)
+**Терминал 1 — PHP бэк:**
+```powershell
+php -S localhost:8000 -t www
+```
+Запуск из корня проекта: флаг `-t www` указывает веб-корень, а `../lib/` доступен скрипту через `require`.
+
+**Терминал 2 — React фронт (hot reload):**
+```powershell
+cd frontend
+npm install        # первый раз
+npm run dev
 ```
 
-Установка (пример для Ubuntu 22.04, Node.js v20):
-```bash
-mkdir -p ~/.local && cd ~/.local
-
-# Скачай нужную версию с nodejs.org:
-wget https://nodejs.org/dist/v20.19.0/node-v20.19.0-linux-x64.tar.gz
-
-# Распакуй прямо в .local:
-tar -xzf node-v20.19.0-linux-x64.tar.gz --strip 1
-
-# Проверь:
-~/.local/bin/node -v
-~/.local/bin/npm -v
-
-# Удали архив:
-rm node-v20.19.0-linux-x64.tar.gz
-```
-
-Добавь в `~/.bashrc` для удобства:
-```bash
-echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
-source ~/.bashrc
-```
-
-> Если Ubuntu 18.04 и нужен Node 18+, используй сборки Beget.  
-> Подробнее: https://beget.com/ru/kb/how-to/web-apps/node-js
+Открой `http://localhost:5173`. Vite проксирует `fetch('api.php?...')` на `localhost:8000`.
 
 ---
 
-## 5. Загрузи проект на сервер
+## Подготовка к первому деплою
+
+### 1. Создай MySQL БД в панели Beget
+
+Панель → **Базы данных** → Создать базу.
+
+### 2. Создай локальный конфиг БД
+
+В репе лежит `lib/config.example.php` — шаблон. Скопируй его как `lib/config.php` и впиши данные:
+
+```powershell
+Copy-Item lib\config.example.php lib\config.php
+```
+
+Отредактируй `lib/config.php`:
+```php
+return [
+    'host'     => 'localhost',
+    'dbname'   => 'woodprxn_test',
+    'user'     => 'woodprxn_test',
+    'password' => 'твой_пароль',
+    'charset'  => 'utf8mb4',
+];
+```
+
+**`lib/config.php` в `.gitignore`** — секреты в репу не попадают. На сервере тоже нужно создать `lib/config.php` вручную (post-receive hook не затирает его).
+
+### 3. Создай сайт в панели Beget
+
+Панель → **Сайты** → Создать сайт → привяжи домен.
+
+---
+
+## Настройка git-деплоя на Beget
+
+### Вариант А — Git-репозиторий прямо на Beget (push to deploy)
+
+Это проще всего, если репа только у тебя.
+
+**На сервере (обычный SSH, не Docker):**
+```bash
+# Создай bare-репо
+mkdir -p ~/repos
+cd ~/repos
+git init --bare node-hosting-test.git
+
+# Создай post-receive hook
+nano node-hosting-test.git/hooks/post-receive
+```
+
+Содержимое hook'а:
+```bash
+#!/bin/bash
+SITE_ROOT=/home/w/woodprxn/woodprxn.beget.tech
+PUBLIC=$SITE_ROOT/public_html
+LIB=$SITE_ROOT/lib
+GIT_DIR=/home/w/woodprxn/repos/node-hosting-test.git
+
+while read oldrev newrev ref; do
+    if [[ $ref =~ .*/main$ ]]; then
+        echo "Deploying main branch..."
+        TMP=/tmp/deploy-$$
+        git --work-tree=$TMP --git-dir=$GIT_DIR checkout -f main
+
+        # Веб-корень
+        rm -rf $PUBLIC/*
+        cp -r $TMP/www/* $PUBLIC/
+
+        # Приватная папка — конфиги с секретами
+        # ВАЖНО: не затираем lib/config.php, если он уже отредактирован на сервере
+        mkdir -p $LIB
+        cp -n $TMP/lib/config.php $LIB/   # -n = не перезаписывать существующий
+        cp $TMP/lib/db.php $LIB/
+
+        rm -rf $TMP
+        echo "Done."
+    fi
+done
+```
+
+Логика деплоя `lib/`:
+- `db.php` — обновляется (это код)
+- `config.php` — **копируется только если его ещё нет** (чтобы не затереть пароли БД, которые ты вписал на сервере)
 
 ```bash
-# Вариант 1 — через SCP (с локальной машины):
-scp -r ./node-hosting-test username@username.beget.tech:~/myapp
+chmod +x node-hosting-test.git/hooks/post-receive
+```
 
-# Вариант 2 — через Git (внутри Docker):
+**Локально:**
+```bash
+git remote add beget woodprxn@woodprxn.beget.tech:/home/w/woodprxn/repos/node-hosting-test.git
+git push beget main
+```
+
+При каждом `git push beget main` файлы из `www/` автоматически оказываются в `public_html`.
+
+---
+
+### Вариант Б — Деплой через GitHub + клонирование на Beget
+
+Если репа уже на GitHub и хочешь pull-модель.
+
+**На сервере:**
+```bash
 cd ~
-git clone https://github.com/yourname/node-hosting-test.git myapp
+git clone https://github.com/youruser/node-hosting-test.git
+
+# Симлинк веб-корня на www/ из репо
+rm -rf ~/woodprxn.beget.tech/public_html
+ln -s ~/node-hosting-test/www ~/woodprxn.beget.tech/public_html
+
+# Симлинк lib (нужно вне веб-корня, но доступно из api.php через ../lib)
+ln -s ~/node-hosting-test/lib ~/woodprxn.beget.tech/lib
 ```
+
+**Пропиши пароль БД** в `~/node-hosting-test/lib/config.php` (можно отредактировать прямо на сервере — но тогда git будет показывать diff; альтернатива — хранить `config.php` вне git и ссылаться на локальный файл через симлинк).
+
+**Для обновления:**
+```bash
+cd ~/node-hosting-test
+git pull
+```
+
+Или настрой cron на `git pull` раз в N минут, либо webhook с GitHub.
 
 ---
 
-## 6. Установи зависимости и собери
+## Workflow
 
 ```bash
-cd ~/myapp
-npm install
-npm run build
+# изменил код фронта или бэка
+cd frontend
+npm run build         # собирает React в ../www/
+
+cd ..
+git add .
+git commit -m "..."
+git push beget main   # или git push origin main при варианте Б
 ```
 
----
-
-## 7. Создай .env.local
-
-```bash
-cat > ~/myapp/.env.local << 'EOF'
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=beget_db_user
-DB_PASSWORD=your_password
-DB_NAME=beget_db_name
-EOF
-```
-
----
-
-## 8. Создай .htaccess
-
-```bash
-cat > ~/myapp/.htaccess << 'EOF'
-PassengerNodejs /home/USERNAME/.local/bin/node
-PassengerAppRoot /home/USERNAME/myapp
-PassengerAppType node
-PassengerStartupFile server.js
-EOF
-```
-
-Замени `USERNAME` на свой логин Beget и `myapp` на реальный путь.
-
----
-
-## 9. Настрой public_html
-
-Beget отдаёт статику через Nginx. `public_html` должен вести на папку `public` твоего проекта:
-
-```bash
-# Удали дефолтный public_html (он пустой или со страницей-заглушкой):
-rm -rf ~/имя_сайта/public_html
-
-# Создай симлинк на папку public проекта:
-ln -s ~/myapp/public ~/имя_сайта/public_html
-```
-
----
-
-## 10. Создай папку tmp
-
-Passenger использует её для управления перезапуском:
-
-```bash
-mkdir -p ~/myapp/tmp
-touch ~/myapp/tmp/restart.txt
-```
-
----
-
-## 11. Проверка
-
-Открой сайт в браузере. Passenger запустит приложение при первом запросе (может быть пауза ~5 сек).
-
-- Нажать "Инициализировать таблицу" → статус "БД готова"
-- Ввести текст → "Отправить в БД" → запись появляется в списке
-
----
-
-## Перезапуск приложения (после обновления кода)
-
-```bash
-cd ~/myapp
-npm run build
-touch tmp/restart.txt   # Passenger перезапустит процесс при следующем запросе
-```
-
----
-
-## Автозапуск после перезагрузки сервера
-
-**Ничего делать не нужно.** Passenger управляется Apache, который стартует автоматически со всеми серверными службами. При первом запросе к сайту после перезагрузки Passenger сам поднимет Node.js процесс.
+Сайт обновлён.
