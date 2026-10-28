@@ -1,173 +1,106 @@
-# Деплой на Beget (виртуальный хостинг)
+# Деплой на Beget (React + PHP)
 
-**Механизм:** Apache mod_passenger — Node.js запускается через `.htaccess`, без PM2 и Nginx-proxy.
+## Структура проекта
 
----
-
-## 1. Создай MySQL БД в панели Beget
-
-Панель → Базы данных → Создать базу данных.  
-Запиши: хост, имя БД, пользователь, пароль.
-
----
-
-## 2. Создай сайт и домен в панели Beget
-
-Панель → Сайты → Создать сайт → привяжи домен (NS-серверы должны указывать на Beget).  
-Beget создаст каталог `~/имя_сайта/public_html`. Он нам понадобится позже.
-
----
-
-## 3. Подключись по SSH и войди в Docker-окружение
-
-На Beget Node.js работает **только внутри Docker-контейнера**:
-
-```bash
-# Обычный SSH:
-ssh username@username.beget.tech
-
-# Войти в Docker (обязательно!):
-ssh localhost -p 222
 ```
-
-Все дальнейшие команды — внутри этого Docker-контейнера.
-
----
-
-## 4. Установи Node.js в ~/.local
-
-Проверь версию Ubuntu (влияет на максимальную версию Node.js):
-```bash
-cat /etc/os-release
-# Ubuntu 22.04 → можно до v24
-# Ubuntu 18.04 → максимум v17.9.1, или используй сборку Beget (v18–21)
-```
-
-Установка (пример для Ubuntu 22.04, Node.js v20):
-```bash
-mkdir -p ~/.local && cd ~/.local
-
-# Скачай нужную версию с nodejs.org:
-wget https://nodejs.org/dist/v20.19.0/node-v20.19.0-linux-x64.tar.gz
-
-# Распакуй прямо в .local:
-tar -xzf node-v20.19.0-linux-x64.tar.gz --strip 1
-
-# Проверь:
-~/.local/bin/node -v
-~/.local/bin/npm -v
-
-# Удали архив:
-rm node-v20.19.0-linux-x64.tar.gz
-```
-
-Добавь в `~/.bashrc` для удобства:
-```bash
-echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
-source ~/.bashrc
-```
-
-> Если Ubuntu 18.04 и нужен Node 18+, используй сборки Beget.  
-> Подробнее: https://beget.com/ru/kb/how-to/web-apps/node-js
-
----
-
-## 5. Загрузи проект на сервер
-
-```bash
-# Вариант 1 — через SCP (с локальной машины):
-scp -r ./node-hosting-test username@username.beget.tech:~/myapp
-
-# Вариант 2 — через Git (внутри Docker):
-cd ~
-git clone https://github.com/yourname/node-hosting-test.git myapp
+node-hosting-test/
+├── frontend/        — Vite + React, собирается локально
+│   ├── src/
+│   ├── index.html
+│   └── dist/        — артефакт сборки (загружается на сервер)
+├── backend/         — PHP API
+│   ├── api.php
+│   ├── db.php
+│   └── config.php
+└── DEPLOY.md
 ```
 
 ---
 
-## 6. Установи зависимости и собери
+## Локальная разработка
 
-```bash
-cd ~/myapp
+**Backend (PHP, встроенный сервер):**
+```powershell
+cd backend
+php -S localhost:8000
+```
+
+**Frontend (Vite dev сервер, в другом терминале):**
+```powershell
+cd frontend
 npm install
+npm run dev
+```
+
+Открой `http://localhost:5173`. Vite проксирует `fetch('api.php?...')` на `localhost:8000` (настроено в `vite.config.ts`).
+
+---
+
+## Деплой на Beget
+
+### 1. Создай MySQL БД в панели Beget
+
+Панель → **Базы данных** → Создать базу.
+Запиши: имя БД, пользователь, пароль.
+
+### 2. Пропиши данные БД в `backend/config.php`
+
+```php
+return [
+    'host'     => 'localhost',
+    'dbname'   => 'woodprxn_test',
+    'user'     => 'woodprxn_test',
+    'password' => 'твой_пароль',
+    'charset'  => 'utf8mb4',
+];
+```
+
+### 3. Собери фронт локально
+
+```powershell
+cd frontend
 npm run build
 ```
 
----
+Готовые файлы будут в `frontend/dist/`.
 
-## 7. Создай .env.local
+### 4. Создай сайт в панели Beget
 
-```bash
-cat > ~/myapp/.env.local << 'EOF'
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=beget_db_user
-DB_PASSWORD=your_password
-DB_NAME=beget_db_name
-EOF
+Панель → **Сайты** → Создать сайт → привяжи домен.
+
+### 5. Загрузи файлы в public_html
+
+Через **Файловый менеджер** в панели Beget загрузи в `~/woodprxn.beget.tech/public_html/`:
+
+**Из `frontend/dist/`:**
+- `index.html`
+- `assets/` (вся папка)
+
+**Из `backend/`:**
+- `api.php`
+- `db.php`
+- `config.php`
+
+Итоговая структура на сервере:
+```
+public_html/
+├── index.html
+├── assets/
+│   ├── index-XXX.js
+│   └── index-XXX.css
+├── api.php
+├── db.php
+└── config.php
 ```
 
----
+### 6. Открой сайт
 
-## 8. Создай .htaccess
-
-```bash
-cat > ~/myapp/.htaccess << 'EOF'
-PassengerNodejs /home/USERNAME/.local/bin/node
-PassengerAppRoot /home/USERNAME/myapp
-PassengerAppType node
-PassengerStartupFile server.js
-EOF
-```
-
-Замени `USERNAME` на свой логин Beget и `myapp` на реальный путь.
+- Нажми **"Инициализировать таблицу"** — создастся таблица `messages`
+- Введи текст → **"Отправить в БД"** → запись появится в списке
 
 ---
 
-## 9. Настрой public_html
+## Обновления
 
-Beget отдаёт статику через Nginx. `public_html` должен вести на папку `public` твоего проекта:
-
-```bash
-# Удали дефолтный public_html (он пустой или со страницей-заглушкой):
-rm -rf ~/имя_сайта/public_html
-
-# Создай симлинк на папку public проекта:
-ln -s ~/myapp/public ~/имя_сайта/public_html
-```
-
----
-
-## 10. Создай папку tmp
-
-Passenger использует её для управления перезапуском:
-
-```bash
-mkdir -p ~/myapp/tmp
-touch ~/myapp/tmp/restart.txt
-```
-
----
-
-## 11. Проверка
-
-Открой сайт в браузере. Passenger запустит приложение при первом запросе (может быть пауза ~5 сек).
-
-- Нажать "Инициализировать таблицу" → статус "БД готова"
-- Ввести текст → "Отправить в БД" → запись появляется в списке
-
----
-
-## Перезапуск приложения (после обновления кода)
-
-```bash
-cd ~/myapp
-npm run build
-touch tmp/restart.txt   # Passenger перезапустит процесс при следующем запросе
-```
-
----
-
-## Автозапуск после перезагрузки сервера
-
-**Ничего делать не нужно.** Passenger управляется Apache, который стартует автоматически со всеми серверными службами. При первом запросе к сайту после перезагрузки Passenger сам поднимет Node.js процесс.
+Изменил фронт → `npm run build` → перезалил `index.html` и `assets/` на сервер.
+Изменил бэк → перезалил `api.php` / `db.php`.

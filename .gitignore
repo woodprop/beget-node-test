@@ -1,3 +1,19 @@
-.next/
+# Dependencies
 node_modules/
+
+# Local env/secrets
+.env
 .env.local
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Build cache
+frontend/.vite/
+*.log
